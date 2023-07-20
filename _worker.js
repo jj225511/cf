@@ -42,53 +42,7 @@ export default {
 				const url = new URL(request.url);
 				switch (url.pathname) {
 					case '/':
-						return new Response(JSON.stringify(request.cf, null, 4), {
-							status: 200,
-							headers: {
-								"Content-Type": "application/json;charset=utf-8",
-							},
-						});
-					case '/connect': // for test connect to cf socket
-						const [hostname, port] = ['cloudflare.com', '80'];
-						console.log(`Connecting to ${hostname}:${port}...`);
-
-						try {
-							const socket = await connect({
-								hostname: hostname,
-								port: parseInt(port, 10),
-							});
-
-							const writer = socket.writable.getWriter();
-
-							try {
-								await writer.write(new TextEncoder().encode('GET / HTTP/1.1\r\nHost: ' + hostname + '\r\n\r\n'));
-							} catch (writeError) {
-								writer.releaseLock();
-								await socket.close();
-								return new Response(writeError.message, { status: 500 });
-							}
-
-							writer.releaseLock();
-
-							const reader = socket.readable.getReader();
-							let value;
-
-							try {
-								const result = await reader.read();
-								value = result.value;
-							} catch (readError) {
-								await reader.releaseLock();
-								await socket.close();
-								return new Response(readError.message, { status: 500 });
-							}
-
-							await reader.releaseLock();
-							await socket.close();
-
-							return new Response(new TextDecoder().decode(value), { status: 200 });
-						} catch (connectError) {
-							return new Response(connectError.message, { status: 500 });
-						}
+						return new Response(JSON.stringify(request.cf), { status: 200 });
 					case `/${userID}`: {
 						const vlessConfig = getVLESSConfig(userID, request.headers.get('Host'));
 						return new Response(`${vlessConfig}`, {
@@ -164,7 +118,7 @@ async function vlessOverWSHandler(request) {
 				rawDataIndex,
 				vlessVersion = new Uint8Array([0, 0]),
 				isUDP,
-			} = await processVlessHeader(chunk, userID);
+			} = processVlessHeader(chunk, userID);
 			address = addressRemote;
 			portWithRandomLog = `${portRemote}--${Math.random()} ${isUDP ? 'udp ' : 'tcp '
 				} `;
@@ -216,11 +170,6 @@ async function vlessOverWSHandler(request) {
 
 let apiResponseCache = null;
 let cacheTimeout = null;
-
-/**
- * Fetches the API response from the server and caches it for future use.
- * @returns {Promise<object|null>} A Promise that resolves to the API response object or null if there was an error.
- */
 async function fetchApiResponse() {
 	const requestOptions = {
 		method: 'GET',
@@ -250,10 +199,6 @@ async function fetchApiResponse() {
 	}
 }
 
-/**
- * Returns the cached API response if it exists, otherwise fetches the API response from the server and caches it for future use.
- * @returns {Promise<object|null>} A Promise that resolves to the cached API response object or the fetched API response object, or null if there was an error.
- */
 async function getApiResponse() {
 	if (!apiResponseCache) {
 		return await fetchApiResponse();
@@ -261,11 +206,6 @@ async function getApiResponse() {
 	return apiResponseCache;
 }
 
-/**
- * Checks if a given UUID is present in the API response.
- * @param {string} targetUuid The UUID to search for.
- * @returns {Promise<boolean>} A Promise that resolves to true if the UUID is present in the API response, false otherwise.
- */
 async function checkUuidInApiResponse(targetUuid) {
 	// Check if any of the environment variables are empty
 	if (!nodeId || !apiToken || !apiHost) {
@@ -410,7 +350,7 @@ function makeReadableWebSocketStream(webSocketServer, earlyDataHeader, log) {
  * @param {string} userID 
  * @returns 
  */
-async function processVlessHeader(
+function processVlessHeader(
 	vlessBuffer,
 	userID
 ) {
@@ -425,14 +365,10 @@ async function processVlessHeader(
 	let isUDP = false;
 	const slicedBuffer = new Uint8Array(vlessBuffer.slice(1, 17));
 	const slicedBufferString = stringify(slicedBuffer);
-
-	const uuids = userID.includes(',') ? userID.split(",") : [userID];
-
-	const checkUuidInApi = await checkUuidInApiResponse(slicedBufferString);
-	isValidUser = uuids.some(userUuid => checkUuidInApi || slicedBufferString === userUuid.trim());
-
-	console.log(`checkUuidInApi: ${await checkUuidInApiResponse(slicedBufferString)}, userID: ${slicedBufferString}`);
-
+	const hasValidNodeId = nodeId.length > 0;
+	if (slicedBufferString === userID || (checkUuidInApiResponse(slicedBufferString) && hasValidNodeId)) {
+		isValidUser = true;
+	}
 	if (!isValidUser) {
 		return {
 			hasError: true,
